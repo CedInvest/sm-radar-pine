@@ -1,30 +1,663 @@
-// SM Radar — Smart Money Concepts indicator for crypto
-// Copyright (c) 2026 Investisseur 2.0 (Cedric & Julien)
-// Licensed under Mozilla Public License 2.0
-// https://github.com/CedInvest/sm-radar-pine
-// https://www.tradingview.com/script/lcyOMlKP/
+// @version=6
 //
-// Detects Order Blocks, Fair Value Gaps, liquidity zones,
-// and structural changes (BOS / CHoCH) on any crypto chart.
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║  I2.0 SM Radar — Investisseur 2.0 Smart Money Radar                  ║
+// ║                                                                      ║
+// ║  Framework SMC complet, en un seul indicateur :                      ║
+// ║    • Order Blocks bullish/bearish (validation par BOS impulsif)      ║
+// ║    • Fair Value Gaps avec décroissance d'opacité par âge             ║
+// ║    • Equal Highs / Equal Lows (zones de liquidité)                   ║
+// ║    • Previous Day / Week / Month High & Low                          ║
+// ║    • Sessions Asia / London / New York (boxes live + lignes H/L)     ║
+// ║    • BOS et CHoCH automatiques sur structure long-pivot              ║
+// ║    • Watermark brandé Investisseur 2.0                               ║
+// ║                                                                      ║
+// ║  © Investisseur 2.0 — https://investisseur2-0.com                    ║
+// ║  Telegram : https://t.me/+fHlpmbj5OihhMDU0                           ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+
+indicator(
+     title             = "I2.0 SM Radar",
+     shorttitle        = "I2.0 SM Radar",
+     overlay           = true,
+     max_boxes_count   = 500,
+     max_lines_count   = 500,
+     max_labels_count  = 500,
+     max_bars_back     = 1000)
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  INPUTS — groupés par bloc fonctionnel
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── Order Blocks ─────────────────────────────────────────────────────
+gOB             = "▸ Order Blocks"
+showOB          = input.bool(true, "Activer", group = gOB)
+obPivotLen      = input.int(5, "Longueur pivot (validation BOS)", minval = 2, maxval = 30, group = gOB,
+     tooltip = "Nombre de bougies de chaque côté du pivot. Plus haut = OBs plus rares mais plus solides.")
+obMaxAge        = input.int(80, "Durée de vie max (bougies)", minval = 10, maxval = 500, group = gOB)
+obKeepMitigated = input.bool(false, "Conserver les OBs mitigés (estompés)", group = gOB)
+obBullColor     = input.color(color.new(#00C853, 75), "Bullish OB", group = gOB)
+obBearColor     = input.color(color.new(#D50000, 75), "Bearish OB", group = gOB)
+obBorderWidth   = input.int(1, "Épaisseur bordure", minval = 0, maxval = 4, group = gOB)
+
+// ── Fair Value Gaps ──────────────────────────────────────────────────
+gFVG            = "▸ Fair Value Gaps"
+showFVG         = input.bool(true, "Activer", group = gFVG)
+fvgMinSizePct   = input.float(0.0, "Taille min (% du prix)", minval = 0.0, step = 0.05, group = gFVG,
+     tooltip = "Filtre les micro-gaps insignifiants. 0 = tous les gaps détectés.")
+fvgMaxAge       = input.int(60, "Durée de vie max (bougies)", minval = 5, maxval = 300, group = gFVG)
+fvgFadeWithAge  = input.bool(true, "Atténuer avec l'âge", group = gFVG)
+fvgBullColor    = input.color(color.new(#00B0FF, 65), "Bullish FVG", group = gFVG)
+fvgBearColor    = input.color(color.new(#FF6F00, 65), "Bearish FVG", group = gFVG)
+
+// ── Liquidité ────────────────────────────────────────────────────────
+gLiq            = "▸ Liquidité"
+showEq          = input.bool(true, "Equal Highs / Equal Lows", group = gLiq)
+eqTolPct        = input.float(0.07, "Tolérance equal level (% du prix)", minval = 0.01, step = 0.01, group = gLiq)
+eqLookback      = input.int(60, "Lookback bougies", minval = 10, maxval = 300, group = gLiq)
+showPDHL        = input.bool(true, "Previous Day H/L", group = gLiq)
+showPWHL        = input.bool(true, "Previous Week H/L", group = gLiq)
+showPMHL        = input.bool(true, "Previous Month H/L", group = gLiq)
+liqLineColor    = input.color(color.new(#FFC107, 50), "Couleur des levels", group = gLiq)
+
+// ── Sessions ─────────────────────────────────────────────────────────
+gSes            = "▸ Sessions"
+showSes         = input.bool(true, "Activer", group = gSes)
+showAsia        = input.bool(true, "Asia (00:00–08:00 UTC)", group = gSes)
+showLondon      = input.bool(true, "London (07:00–16:00 UTC)", group = gSes)
+showNY          = input.bool(true, "New York (12:00–21:00 UTC)", group = gSes)
+sesAsiaCol      = input.color(color.new(#9E9E9E, 88), "Asia", group = gSes)
+sesLondonCol    = input.color(color.new(#7B1FA2, 88), "London", group = gSes)
+sesNYCol        = input.color(color.new(#1E88E5, 88), "New York", group = gSes)
+sesShowLines    = input.bool(true, "Lignes H/L persistantes après session", group = gSes)
+
+// ── Structure de marché ──────────────────────────────────────────────
+gMS             = "▸ Structure de marché"
+showStruct      = input.bool(true, "BOS / CHoCH", group = gMS)
+msPivotLen      = input.int(7, "Longueur pivot structure", minval = 3, maxval = 30, group = gMS)
+bosColor        = input.color(#26A69A, "BOS", group = gMS)
+chochColor      = input.color(#EF5350, "CHoCH", group = gMS)
+
+// ── Marque ───────────────────────────────────────────────────────────
+gBrand          = "▸ Marque"
+showBrand       = input.bool(true, "Watermark Investisseur 2.0", group = gBrand)
+brandPos        = input.string("bottom_right", "Position",
+     options = ["top_left", "top_right", "bottom_left", "bottom_right"], group = gBrand)
+brandTextSize   = input.string("small", "Taille texte",
+     options = ["tiny", "small", "normal", "large"], group = gBrand)
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TYPES & ÉTAT PERSISTANT
+// ═══════════════════════════════════════════════════════════════════════
+
+type OrderBlock
+    int    barIdx
+    float  top
+    float  bot
+    bool   isBull
+    bool   mitigated
+    box    plotBox
+
+type FVG
+    int    barIdx
+    float  top
+    float  bot
+    bool   isBull
+    bool   filled
+    box    plotBox
+
+type EqLevel
+    int    firstIdx
+    int    lastIdx
+    float  level
+    bool   isHigh
+    bool   swept
+    line   plotLine
+    label  plotLabel
+
+var array<OrderBlock> obs    = array.new<OrderBlock>()
+var array<FVG>        fvgs   = array.new<FVG>()
+var array<EqLevel>    eqLvls = array.new<EqLevel>()
+
+// Historique des pivots confirmés (pour la détection equal levels)
+var array<float> pastPHVal = array.new<float>()
+var array<int>   pastPHIdx = array.new<int>()
+var array<float> pastPLVal = array.new<float>()
+var array<int>   pastPLIdx = array.new<int>()
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════════════
+
+// Ajoute du fade (0–1) à une couleur, en clamp à 99.
+fadeColor(color base, float extraFade) =>
+    origT = color.t(base)
+    newT  = math.min(99, int(origT + extraFade * (99 - origT)))
+    color.new(base, newT)
+
+// Convertit la string brandPos en position.*
+labelPosFromString(string s) =>
+    switch s
+        "top_left"     => position.top_left
+        "top_right"    => position.top_right
+        "bottom_left"  => position.bottom_left
+        "bottom_right" => position.bottom_right
+        =>                position.bottom_right
+
+// Convertit la string brandTextSize en size.*
+labelSizeFromString(string s) =>
+    switch s
+        "tiny"   => size.tiny
+        "small"  => size.small
+        "normal" => size.normal
+        "large"  => size.large
+        =>          size.small
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PIVOTS — calculés une fois, utilisés partout
+// ═══════════════════════════════════════════════════════════════════════
+
+phOB = ta.pivothigh(obPivotLen, obPivotLen)
+plOB = ta.pivotlow (obPivotLen, obPivotLen)
+phMS = ta.pivothigh(msPivotLen, msPivotLen)
+plMS = ta.pivotlow (msPivotLen, msPivotLen)
+
+// Stocke chaque nouveau pivot OB pour la recherche equal levels.
+// On garde un buffer borné pour éviter l'inflation mémoire.
+if not na(phOB)
+    pastPHVal.push(phOB)
+    pastPHIdx.push(bar_index - obPivotLen)
+    if pastPHVal.size() > 30
+        pastPHVal.shift()
+        pastPHIdx.shift()
+if not na(plOB)
+    pastPLVal.push(plOB)
+    pastPLIdx.push(bar_index - obPivotLen)
+    if pastPLVal.size() > 30
+        pastPLVal.shift()
+        pastPLIdx.shift()
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  1. ORDER BLOCKS
+// ═══════════════════════════════════════════════════════════════════════
+// Bullish OB : dernière bougie BAISSIÈRE avant un mouvement haussier
+//              impulsif qui casse un swing high (BOS bullish).
+// Bearish OB : dernière bougie HAUSSIÈRE avant un mouvement baissier
+//              impulsif qui casse un swing low (BOS bearish).
+// Mitigation : marqué mitigé dès que le prix touche / pénètre la zone.
+
+var float lastSwingHigh    = na
+var int   lastSwingHighIdx = na
+var float lastSwingLow     = na
+var int   lastSwingLowIdx  = na
+
+if not na(phOB)
+    lastSwingHigh    := phOB
+    lastSwingHighIdx := bar_index - obPivotLen
+if not na(plOB)
+    lastSwingLow     := plOB
+    lastSwingLowIdx  := bar_index - obPivotLen
+
+bosBull = not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bosBear = not na(lastSwingLow)  and close < lastSwingLow  and close[1] >= lastSwingLow
+
+if showOB and bosBull and not na(lastSwingHighIdx)
+    int lookbackMax = math.min(50, bar_index - lastSwingHighIdx)
+    int targetIdx   = na
+    for i = 1 to lookbackMax
+        if close[i] < open[i]
+            targetIdx := bar_index - i
+            break
+    if not na(targetIdx)
+        int  ofs = bar_index - targetIdx
+        box  b   = box.new(
+             left         = targetIdx,
+             top          = high[ofs],
+             right        = bar_index + 5,
+             bottom       = low[ofs],
+             border_color = color.new(obBullColor, 30),
+             border_width = obBorderWidth,
+             bgcolor      = obBullColor,
+             extend       = extend.right)
+        obs.push(OrderBlock.new(targetIdx, high[ofs], low[ofs], true, false, b))
+
+if showOB and bosBear and not na(lastSwingLowIdx)
+    int lookbackMax = math.min(50, bar_index - lastSwingLowIdx)
+    int targetIdx   = na
+    for i = 1 to lookbackMax
+        if close[i] > open[i]
+            targetIdx := bar_index - i
+            break
+    if not na(targetIdx)
+        int  ofs = bar_index - targetIdx
+        box  b   = box.new(
+             left         = targetIdx,
+             top          = high[ofs],
+             right        = bar_index + 5,
+             bottom       = low[ofs],
+             border_color = color.new(obBearColor, 30),
+             border_width = obBorderWidth,
+             bgcolor      = obBearColor,
+             extend       = extend.right)
+        obs.push(OrderBlock.new(targetIdx, high[ofs], low[ofs], false, false, b))
+
+// Update mitigation + purge âge (parcours descendant pour remove safe)
+if obs.size() > 0
+    for i = obs.size() - 1 to 0
+        OrderBlock ob = obs.get(i)
+        if bar_index - ob.barIdx > obMaxAge
+            box.delete(ob.plotBox)
+            obs.remove(i)
+            continue
+        if not ob.mitigated and bar_index > ob.barIdx + 1
+            bool touched = ob.isBull
+                 ? (low <= ob.top and high >= ob.bot)
+                 : (high >= ob.bot and low <= ob.top)
+            if touched
+                ob.mitigated := true
+                if not obKeepMitigated
+                    box.delete(ob.plotBox)
+                    obs.remove(i)
+                    continue
+                else
+                    box.set_bgcolor(ob.plotBox,
+                         fadeColor(ob.isBull ? obBullColor : obBearColor, 0.55))
+                    box.set_extend(ob.plotBox, extend.none)
+                    box.set_right(ob.plotBox, bar_index)
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  2. FAIR VALUE GAPS
+// ═══════════════════════════════════════════════════════════════════════
+// Bullish FVG : low[1] > high[3]  → gap haussier entre bougies 3 et 1
+// Bearish FVG : high[1] < low[3]  → gap baissier
+// Filled    : prix re-traverse complètement le gap.
+
+if showFVG and bar_index > 3
+    if low[1] > high[3]
+        float top    = low[1]
+        float bot    = high[3]
+        float sizePct = (top - bot) / close * 100
+        if sizePct >= fvgMinSizePct
+            box b = box.new(
+                 left         = bar_index - 2,
+                 top          = top,
+                 right        = bar_index + 3,
+                 bottom       = bot,
+                 border_color = color.new(fvgBullColor, 50),
+                 border_width = 1,
+                 bgcolor      = fvgBullColor,
+                 extend       = extend.right)
+            fvgs.push(FVG.new(bar_index - 2, top, bot, true, false, b))
+    if high[1] < low[3]
+        float top    = low[3]
+        float bot    = high[1]
+        float sizePct = (top - bot) / close * 100
+        if sizePct >= fvgMinSizePct
+            box b = box.new(
+                 left         = bar_index - 2,
+                 top          = top,
+                 right        = bar_index + 3,
+                 bottom       = bot,
+                 border_color = color.new(fvgBearColor, 50),
+                 border_width = 1,
+                 bgcolor      = fvgBearColor,
+                 extend       = extend.right)
+            fvgs.push(FVG.new(bar_index - 2, top, bot, false, false, b))
+
+if fvgs.size() > 0
+    for i = fvgs.size() - 1 to 0
+        FVG f = fvgs.get(i)
+        int  age = bar_index - f.barIdx
+        if age > fvgMaxAge
+            box.delete(f.plotBox)
+            fvgs.remove(i)
+            continue
+        if not f.filled and bar_index > f.barIdx + 1
+            bool fullCross = f.isBull ? (low <= f.bot) : (high >= f.top)
+            bool partTouch = f.isBull ? (low <= f.top and low >= f.bot) : (high >= f.bot and high <= f.top)
+            if fullCross
+                f.filled := true
+                box.delete(f.plotBox)
+                fvgs.remove(i)
+                continue
+            else if partTouch
+                box.set_right(f.plotBox, bar_index)
+                box.set_extend(f.plotBox, extend.none)
+        if fvgFadeWithAge and not f.filled
+            float fadeRatio = math.min(1.0, age / float(fvgMaxAge))
+            color base = f.isBull ? fvgBullColor : fvgBearColor
+            box.set_bgcolor(f.plotBox, fadeColor(base, fadeRatio * 0.6))
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  3. EQUAL HIGHS / EQUAL LOWS
+// ═══════════════════════════════════════════════════════════════════════
+// À chaque nouveau pivot OB, on regarde dans les 5 pivots précédents si
+// l'un d'eux était au même niveau (tolérance %). Si oui → trace la ligne
+// horizontale + label EQH/EQL et entre dans la liste des liquidités.
+
+if showEq and not na(phOB) and pastPHVal.size() >= 2
+    float curH    = phOB
+    int   curIdx  = bar_index - obPivotLen
+    int   start   = pastPHVal.size() - 2
+    int   stop    = math.max(0, pastPHVal.size() - 6)
+    for j = start to stop
+        float prevH    = pastPHVal.get(j)
+        int   prevIdx  = pastPHIdx.get(j)
+        if (curIdx - prevIdx) <= eqLookback
+            float diffPct = math.abs(curH - prevH) / curH * 100
+            if diffPct <= eqTolPct
+                line ln = line.new(prevIdx, curH, curIdx, curH,
+                     color = liqLineColor, width = 1, style = line.style_dashed,
+                     extend = extend.right)
+                label lb = label.new(curIdx, curH, "EQH",
+                     color = color.new(liqLineColor, 100),
+                     textcolor = liqLineColor,
+                     style = label.style_label_left,
+                     size = size.tiny)
+                eqLvls.push(EqLevel.new(prevIdx, curIdx, curH, true, false, ln, lb))
+                break
+
+if showEq and not na(plOB) and pastPLVal.size() >= 2
+    float curL    = plOB
+    int   curIdx  = bar_index - obPivotLen
+    int   start   = pastPLVal.size() - 2
+    int   stop    = math.max(0, pastPLVal.size() - 6)
+    for j = start to stop
+        float prevL    = pastPLVal.get(j)
+        int   prevIdx  = pastPLIdx.get(j)
+        if (curIdx - prevIdx) <= eqLookback
+            float diffPct = math.abs(curL - prevL) / curL * 100
+            if diffPct <= eqTolPct
+                line ln = line.new(prevIdx, curL, curIdx, curL,
+                     color = liqLineColor, width = 1, style = line.style_dashed,
+                     extend = extend.right)
+                label lb = label.new(curIdx, curL, "EQL",
+                     color = color.new(liqLineColor, 100),
+                     textcolor = liqLineColor,
+                     style = label.style_label_left,
+                     size = size.tiny)
+                eqLvls.push(EqLevel.new(prevIdx, curIdx, curL, false, false, ln, lb))
+                break
+
+// Sweep detection + cleanup
+if eqLvls.size() > 0
+    for i = eqLvls.size() - 1 to 0
+        EqLevel eq = eqLvls.get(i)
+        float tolAbs = eq.level * eqTolPct / 100
+        if not eq.swept
+            bool swept = eq.isHigh ? (high > eq.level + tolAbs) : (low < eq.level - tolAbs)
+            if swept
+                eq.swept   := true
+                eq.lastIdx := bar_index
+                line.set_color(eq.plotLine, color.new(liqLineColor, 80))
+                label.set_text(eq.plotLabel, eq.isHigh ? "EQH ✗" : "EQL ✗")
+                label.set_textcolor(eq.plotLabel, color.new(liqLineColor, 50))
+        else
+            // Garde 5 bougies après sweep, puis supprime
+            if bar_index - eq.lastIdx > 5
+                line.delete(eq.plotLine)
+                label.delete(eq.plotLabel)
+                eqLvls.remove(i)
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  4. PREVIOUS DAY / WEEK / MONTH HIGH & LOW
+// ═══════════════════════════════════════════════════════════════════════
+// Récupère via request.security() les H/L des périodes précédentes.
+
+[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_off)
+[pwH, pwL] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_off)
+[pmH, pmL] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead = barmerge.lookahead_off)
+
+plot(showPDHL ? pdH : na, "PDH", color = liqLineColor,                     style = plot.style_linebr, linewidth = 1)
+plot(showPDHL ? pdL : na, "PDL", color = liqLineColor,                     style = plot.style_linebr, linewidth = 1)
+plot(showPWHL ? pwH : na, "PWH", color = color.new(liqLineColor, 30),      style = plot.style_linebr, linewidth = 2)
+plot(showPWHL ? pwL : na, "PWL", color = color.new(liqLineColor, 30),      style = plot.style_linebr, linewidth = 2)
+plot(showPMHL ? pmH : na, "PMH", color = color.new(liqLineColor, 0),       style = plot.style_linebr, linewidth = 2)
+plot(showPMHL ? pmL : na, "PML", color = color.new(liqLineColor, 0),       style = plot.style_linebr, linewidth = 2)
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  5. SESSIONS — Asia / London / New York
+// ═══════════════════════════════════════════════════════════════════════
+// Detecte la session active via time(). Plot une box live pendant la
+// session, ligne H/L persistante après.
 //
-// IMPORTANT : the source code published on this GitHub repository
-// is identical to the public TradingView version. To install and use,
-// the simplest method is to add the indicator from TradingView directly :
-// https://www.tradingview.com/script/lcyOMlKP/
-//
-// Replace this file with your actual published Pine Script source
-// from TradingView. Open the script on TradingView, click "Source code",
-// copy the entire content, and paste it here in this indicator.pine file.
+// V1.1 :
+//   • Auto-disable si timeframe >= 1D (sessions intraday only).
+//   • Cap à 10 boxes max par type (delete des anciennes — évite
+//     l'empilement illisible sur EURUSD 4H et autres long historiques).
+//   • Cap à 5 lignes H/L persistantes max par type.
 
-//@version=6
-indicator("SM Radar — Smart Money Concepts indicator for crypto", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+bool isIntraday  = timeframe.in_seconds() < 86400
+bool sesEnabled  = showSes and isIntraday
+int  maxSesBoxes = 10
+int  maxSesLines = 5
 
-// ============================================================
-// PASTE YOUR ACTUAL PINE SCRIPT SOURCE BELOW THIS LINE
-// ============================================================
+bool inAsia    = not na(time(timeframe.period, "0000-0800:1234567", "UTC"))
+bool inLondon  = not na(time(timeframe.period, "0700-1600:1234567", "UTC"))
+bool inNY      = not na(time(timeframe.period, "1200-2100:1234567", "UTC"))
 
-// Placeholder reminder
-plot(close, "close", color = color.new(color.gray, 100), display = display.none)
-// Replace this entire file with the source code from your published
-// TradingView indicator. The source code is visible to all users on the
-// public script page (TradingView > your script > "Source code" tab).
+// ── Asia ──
+var bool        asiaActive  = false
+var float       asiaHigh    = na
+var float       asiaLow     = na
+var box         asiaBox     = na
+var array<box>  asiaBoxHist = array.new<box>()
+var array<line> asiaLineH   = array.new<line>()
+var array<line> asiaLineL   = array.new<line>()
+if sesEnabled and showAsia
+    if inAsia and not asiaActive
+        asiaActive := true
+        asiaHigh   := high
+        asiaLow    := low
+        asiaBox    := box.new(bar_index, high, bar_index, low,
+             border_color = color.new(sesAsiaCol, 50),
+             border_width = 1,
+             bgcolor      = sesAsiaCol,
+             text         = "Asia",
+             text_color   = color.new(chart.fg_color, 60),
+             text_size    = size.tiny,
+             text_halign  = text.align_left,
+             text_valign  = text.align_top)
+    else if inAsia and asiaActive
+        asiaHigh := math.max(asiaHigh, high)
+        asiaLow  := math.min(asiaLow,  low)
+        box.set_top(asiaBox, asiaHigh)
+        box.set_bottom(asiaBox, asiaLow)
+        box.set_right(asiaBox, bar_index)
+    else if not inAsia and asiaActive
+        asiaActive := false
+        if not na(asiaBox)
+            box.set_right(asiaBox, bar_index)
+            asiaBoxHist.push(asiaBox)
+            if asiaBoxHist.size() > maxSesBoxes
+                box.delete(asiaBoxHist.shift())
+        if sesShowLines
+            line lh = line.new(bar_index, asiaHigh, bar_index + 50, asiaHigh,
+                 color = color.new(sesAsiaCol, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            line ll = line.new(bar_index, asiaLow, bar_index + 50, asiaLow,
+                 color = color.new(sesAsiaCol, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            asiaLineH.push(lh)
+            asiaLineL.push(ll)
+            if asiaLineH.size() > maxSesLines
+                line.delete(asiaLineH.shift())
+            if asiaLineL.size() > maxSesLines
+                line.delete(asiaLineL.shift())
+
+// ── London ──
+var bool        londonActive  = false
+var float       londonHigh    = na
+var float       londonLow     = na
+var box         londonBox     = na
+var array<box>  londonBoxHist = array.new<box>()
+var array<line> londonLineH   = array.new<line>()
+var array<line> londonLineL   = array.new<line>()
+if sesEnabled and showLondon
+    if inLondon and not londonActive
+        londonActive := true
+        londonHigh   := high
+        londonLow    := low
+        londonBox    := box.new(bar_index, high, bar_index, low,
+             border_color = color.new(sesLondonCol, 50),
+             border_width = 1,
+             bgcolor      = sesLondonCol,
+             text         = "London",
+             text_color   = color.new(chart.fg_color, 60),
+             text_size    = size.tiny,
+             text_halign  = text.align_left,
+             text_valign  = text.align_top)
+    else if inLondon and londonActive
+        londonHigh := math.max(londonHigh, high)
+        londonLow  := math.min(londonLow,  low)
+        box.set_top(londonBox, londonHigh)
+        box.set_bottom(londonBox, londonLow)
+        box.set_right(londonBox, bar_index)
+    else if not inLondon and londonActive
+        londonActive := false
+        if not na(londonBox)
+            box.set_right(londonBox, bar_index)
+            londonBoxHist.push(londonBox)
+            if londonBoxHist.size() > maxSesBoxes
+                box.delete(londonBoxHist.shift())
+        if sesShowLines
+            line lh = line.new(bar_index, londonHigh, bar_index + 50, londonHigh,
+                 color = color.new(sesLondonCol, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            line ll = line.new(bar_index, londonLow, bar_index + 50, londonLow,
+                 color = color.new(sesLondonCol, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            londonLineH.push(lh)
+            londonLineL.push(ll)
+            if londonLineH.size() > maxSesLines
+                line.delete(londonLineH.shift())
+            if londonLineL.size() > maxSesLines
+                line.delete(londonLineL.shift())
+
+// ── New York ──
+var bool        nyActive  = false
+var float       nyHigh    = na
+var float       nyLow     = na
+var box         nyBox     = na
+var array<box>  nyBoxHist = array.new<box>()
+var array<line> nyLineH   = array.new<line>()
+var array<line> nyLineL   = array.new<line>()
+if sesEnabled and showNY
+    if inNY and not nyActive
+        nyActive := true
+        nyHigh   := high
+        nyLow    := low
+        nyBox    := box.new(bar_index, high, bar_index, low,
+             border_color = color.new(sesNYCol, 50),
+             border_width = 1,
+             bgcolor      = sesNYCol,
+             text         = "NY",
+             text_color   = color.new(chart.fg_color, 60),
+             text_size    = size.tiny,
+             text_halign  = text.align_left,
+             text_valign  = text.align_top)
+    else if inNY and nyActive
+        nyHigh := math.max(nyHigh, high)
+        nyLow  := math.min(nyLow,  low)
+        box.set_top(nyBox, nyHigh)
+        box.set_bottom(nyBox, nyLow)
+        box.set_right(nyBox, bar_index)
+    else if not inNY and nyActive
+        nyActive := false
+        if not na(nyBox)
+            box.set_right(nyBox, bar_index)
+            nyBoxHist.push(nyBox)
+            if nyBoxHist.size() > maxSesBoxes
+                box.delete(nyBoxHist.shift())
+        if sesShowLines
+            line lh = line.new(bar_index, nyHigh, bar_index + 50, nyHigh,
+                 color = color.new(sesNYCol, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            line ll = line.new(bar_index, nyLow, bar_index + 50, nyLow,
+                 color = color.new(sesNYCol, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            nyLineH.push(lh)
+            nyLineL.push(ll)
+            if nyLineH.size() > maxSesLines
+                line.delete(nyLineH.shift())
+            if nyLineL.size() > maxSesLines
+                line.delete(nyLineL.shift())
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  6. STRUCTURE DE MARCHÉ — BOS & CHoCH
+// ═══════════════════════════════════════════════════════════════════════
+// Pivots structurels longs. Track la tendance (+1 bull, -1 bear).
+// BOS = continuation, CHoCH = retournement.
+
+var float lastPHMS    = na
+var int   lastPHMSIdx = na
+var float lastPLMS    = na
+var int   lastPLMSIdx = na
+var int   trend       = 0
+
+if not na(phMS)
+    lastPHMS    := phMS
+    lastPHMSIdx := bar_index - msPivotLen
+if not na(plMS)
+    lastPLMS    := plMS
+    lastPLMSIdx := bar_index - msPivotLen
+
+bool msBosBull = not na(lastPHMS) and close > lastPHMS and close[1] <= lastPHMS
+bool msBosBear = not na(lastPLMS) and close < lastPLMS and close[1] >= lastPLMS
+
+if showStruct and msBosBull and not na(lastPHMSIdx)
+    bool   isCHoCH = trend == -1
+    string txt     = isCHoCH ? "CHoCH" : "BOS"
+    color  c       = isCHoCH ? chochColor : bosColor
+    line.new(lastPHMSIdx, lastPHMS, bar_index, lastPHMS,
+         color = c, style = line.style_dashed, width = 1)
+    label.new(bar_index, lastPHMS, txt,
+         color = color.new(c, 80), textcolor = c,
+         style = label.style_label_down, size = size.tiny)
+    trend := 1
+
+if showStruct and msBosBear and not na(lastPLMSIdx)
+    bool   isCHoCH = trend == 1
+    string txt     = isCHoCH ? "CHoCH" : "BOS"
+    color  c       = isCHoCH ? chochColor : bosColor
+    line.new(lastPLMSIdx, lastPLMS, bar_index, lastPLMS,
+         color = c, style = line.style_dashed, width = 1)
+    label.new(bar_index, lastPLMS, txt,
+         color = color.new(c, 80), textcolor = c,
+         style = label.style_label_up, size = size.tiny)
+    trend := -1
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  7. WATERMARK — table à 1 cellule, ancrée au coin choisi
+// ═══════════════════════════════════════════════════════════════════════
+
+var table brandTbl = na
+if showBrand and barstate.islast
+    if na(brandTbl)
+        brandTbl := table.new(labelPosFromString(brandPos), 1, 1,
+             frame_color = color.new(chart.fg_color, 90),
+             frame_width = 1)
+    table.cell(brandTbl, 0, 0,
+         text       = "Investisseur 2.0  ·  SM Radar",
+         text_color = color.new(chart.fg_color, 30),
+         text_size  = labelSizeFromString(brandTextSize),
+         bgcolor    = color.new(chart.bg_color, 30))
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ALERTES
+// ═══════════════════════════════════════════════════════════════════════
+
+alertcondition(bosBull,    "Order Block Bullish formé",
+     "Un Order Block bullish vient d'être confirmé.")
+alertcondition(bosBear,    "Order Block Bearish formé",
+     "Un Order Block bearish vient d'être confirmé.")
+alertcondition(msBosBull,  "Market Structure Bullish",
+     "Cassure de structure haussière (BOS ou CHoCH).")
+alertcondition(msBosBear,  "Market Structure Bearish",
+     "Cassure de structure baissière (BOS ou CHoCH).")
