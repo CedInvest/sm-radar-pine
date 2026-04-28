@@ -1,0 +1,30 @@
+// SM Radar — Smart Money Concepts indicator for crypto
+// Copyright (c) 2026 Investisseur 2.0 (Cedric & Julien)
+// Licensed under Mozilla Public License 2.0
+// https://github.com/CedInvest/sm-radar-pine
+// https://www.tradingview.com/script/lcyOMlKP/
+//
+// Detects Order Blocks, Fair Value Gaps, liquidity zones,
+// and structural changes (BOS / CHoCH) on any crypto chart.
+//
+// IMPORTANT : the source code published on this GitHub repository
+// is identical to the public TradingView version. To install and use,
+// the simplest method is to add the indicator from TradingView directly :
+// https://www.tradingview.com/script/lcyOMlKP/
+//
+// Replace this file with your actual published Pine Script source
+// from TradingView. Open the script on TradingView, click "Source code",
+// copy the entire content, and paste it here in this indicator.pine file.
+
+//@version=6
+indicator("SM Radar — Smart Money Concepts indicator for crypto", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ============================================================
+// PASTE YOUR ACTUAL PINE SCRIPT SOURCE BELOW THIS LINE
+// ============================================================
+
+// Placeholder reminder
+plot(close, "close", color = color.new(color.gray, 100), display = display.none)
+// Replace this entire file with the source code from your published
+// TradingView indicator. The source code is visible to all users on the
+// public script page (TradingView > your script > "Source code" tab).
